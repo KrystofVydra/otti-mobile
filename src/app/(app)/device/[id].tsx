@@ -1,4 +1,4 @@
-import { matchFont } from '@shopify/react-native-skia';
+import { Circle, matchFont } from '@shopify/react-native-skia';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
@@ -11,7 +11,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CartesianChart, Line } from 'victory-native';
+import { runOnJS, useAnimatedReaction } from 'react-native-reanimated';
+import { CartesianChart, Line, useChartPressState } from 'victory-native';
 
 import { formatLastSeen, isOnline } from '@/lib/deviceStatus';
 import { useDevices, useReadings } from '@/lib/hooks';
@@ -26,15 +27,23 @@ const axisFont = matchFont({
   fontSize: 11,
 });
 
+const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+
 /** Format an x-axis tick (epoch ms) readably for the selected range. */
 function formatXLabel(ms: number, range: RangeKey): string {
   const d = new Date(ms);
+  // Multi-day ranges: European day.month. (e.g. "24.5.")
   if (range === '7d' || range === '30d') {
-    return `${d.getMonth() + 1}/${d.getDate()}`;
+    return `${d.getDate()}.${d.getMonth() + 1}.`;
   }
-  const hh = d.getHours().toString().padStart(2, '0');
-  const mm = d.getMinutes().toString().padStart(2, '0');
-  return `${hh}:${mm}`;
+  // Short ranges: time of day.
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** Tooltip timestamp: "DD.MM. HH:MM" (e.g. "24.5. 14:00"). */
+function formatTooltipTime(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getDate()}.${d.getMonth() + 1}. ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 function StatusPill({ online }: { online: boolean }) {
@@ -97,6 +106,23 @@ export default function DeviceDetailScreen() {
       .sort((a, b) => a.time - b.time);
   }, [readings]);
 
+  // Touch interaction: marker dot follows the finger via shared values (UI thread),
+  // and we mirror the matched data-point index into React state for the readout.
+  const { state, isActive } = useChartPressState({ x: 0, y: { temperature: 0 } });
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
+  useAnimatedReaction(
+    () => state.matchedIndex.value,
+    (idx) => {
+      runOnJS(setActiveIndex)(idx);
+    },
+  );
+
+  const activePoint =
+    isActive && activeIndex != null && activeIndex >= 0 && activeIndex < chartData.length
+      ? chartData[activeIndex]
+      : null;
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <Stack.Screen options={{ title: deviceName, headerBackTitle: 'Devices' }} />
@@ -143,18 +169,52 @@ export default function DeviceDetailScreen() {
                 data={chartData}
                 xKey="time"
                 yKeys={['temperature']}
+                chartPressState={state}
                 domainPadding={{ top: 24, bottom: 24, left: 8, right: 8 }}
                 axisOptions={{
                   font: axisFont,
                   lineColor: '#E2E4E8',
                   labelColor: '#60646C',
                   formatXLabel: (v) => formatXLabel(v, range),
-                  formatYLabel: (v) => `${Math.round(v)}°`,
+                  formatYLabel: (v) => `${v.toFixed(1)}°`,
                 }}>
                 {({ points }) => (
-                  <Line points={points.temperature} color={ACCENT} strokeWidth={2} />
+                  <>
+                    <Line points={points.temperature} color={ACCENT} strokeWidth={2} />
+                    {isActive ? (
+                      <>
+                        <Circle
+                          cx={state.x.position}
+                          cy={state.y.temperature.position}
+                          r={8}
+                          color={ACCENT}
+                          opacity={0.16}
+                        />
+                        <Circle
+                          cx={state.x.position}
+                          cy={state.y.temperature.position}
+                          r={4.5}
+                          color={ACCENT}
+                        />
+                        <Circle
+                          cx={state.x.position}
+                          cy={state.y.temperature.position}
+                          r={2}
+                          color="#ffffff"
+                        />
+                      </>
+                    ) : null}
+                  </>
                 )}
               </CartesianChart>
+
+              {/* Touch readout (nearest data point) */}
+              {activePoint ? (
+                <View style={styles.readout} pointerEvents="none">
+                  <Text style={styles.readoutTemp}>{activePoint.temperature.toFixed(1)}°C</Text>
+                  <Text style={styles.readoutTime}>{formatTooltipTime(activePoint.time)}</Text>
+                </View>
+              ) : null}
             </View>
           )}
         </View>
@@ -247,6 +307,34 @@ const styles = StyleSheet.create({
   },
   chart: {
     height: 280,
+  },
+  readout: {
+    position: 'absolute',
+    top: 0,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#E2E4E8',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    shadowColor: '#000000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  readoutTemp: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ACCENT,
+  },
+  readoutTime: {
+    fontSize: 13,
+    color: '#60646C',
   },
   chartState: {
     height: 280,
