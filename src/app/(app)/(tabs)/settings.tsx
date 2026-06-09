@@ -4,15 +4,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/lib/auth';
 
 /**
- * Placeholder authenticated landing screen. Proves end-to-end auth by showing
- * the logged-in user and offering logout. Replaced by the real dashboard next.
+ * Minimal Settings tab. For now it shows the signed-in user and offers logout;
+ * real settings come later. (Replaced the create-expo-app "explore" demo tab.)
  */
-export default function HomeScreen() {
+export default function SettingsScreen() {
   const { user, signOut } = useAuth();
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
+        <Text style={styles.heading}>Settings</Text>
+
         <View style={styles.card}>
           <Text style={styles.label}>Signed in as</Text>
           <Text style={styles.name}>{user?.display_name ?? '—'}</Text>
@@ -32,36 +34,42 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#F5F6F8',
   },
   container: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    gap: 32,
+    padding: 16,
+    gap: 24,
+  },
+  heading: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#000000',
   },
   card: {
-    alignItems: 'center',
-    gap: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ECEDEF',
+    gap: 4,
   },
   label: {
     fontSize: 14,
     color: '#60646C',
   },
   name: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '700',
     color: '#000000',
   },
   email: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#60646C',
   },
   button: {
     height: 50,
     borderRadius: 10,
-    paddingHorizontal: 32,
     backgroundColor: '#208AEF',
     alignItems: 'center',
     justifyContent: 'center',

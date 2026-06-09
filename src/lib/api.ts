@@ -11,7 +11,7 @@
  *    mistaken for an expired session.
  */
 import { clearToken, getToken } from '@/lib/tokenStore';
-import type { LoginResponse, User } from '@/lib/types';
+import type { DeviceListEntry, LoginResponse, User } from '@/lib/types';
 
 /** Base URL for the backend. Change here to point at another environment. */
 export const API_BASE_URL = 'https://api.otti.cz';
@@ -128,4 +128,11 @@ export function getMe(): Promise<User> {
 /** POST /auth/logout — invalidate the session server-side. */
 export function logout(): Promise<void> {
   return apiFetch<void>('/auth/logout', { method: 'POST' });
+}
+
+/* ---- Devices ---- */
+
+/** GET /devices — the user's devices, each with its latest reading. */
+export function getDevices(): Promise<DeviceListEntry[]> {
+  return apiFetch<DeviceListEntry[]>('/devices');
 }

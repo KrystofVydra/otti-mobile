@@ -1,6 +1,5 @@
-import { Redirect } from 'expo-router';
+import { Redirect, Stack } from 'expo-router';
 
-import AppTabs from '@/components/app-tabs';
 import { useAuth } from '@/lib/auth';
 
 export default function AppLayout() {
@@ -11,5 +10,11 @@ export default function AppLayout() {
     return <Redirect href="/login" />;
   }
 
-  return <AppTabs />;
+  // The tab bar lives in the (tabs) group; device detail is pushed over it.
+  return (
+    <Stack>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="device/[id]" options={{ headerShown: true }} />
+    </Stack>
+  );
 }
