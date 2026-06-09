@@ -11,7 +11,7 @@
  *    mistaken for an expired session.
  */
 import { clearToken, getToken } from '@/lib/tokenStore';
-import type { DeviceListEntry, LoginResponse, User } from '@/lib/types';
+import type { DeviceListEntry, LoginResponse, Reading, User } from '@/lib/types';
 
 /** Base URL for the backend. Change here to point at another environment. */
 export const API_BASE_URL = 'https://api.otti.cz';
@@ -135,4 +135,23 @@ export function logout(): Promise<void> {
 /** GET /devices — the user's devices, each with its latest reading. */
 export function getDevices(): Promise<DeviceListEntry[]> {
   return apiFetch<DeviceListEntry[]>('/devices');
+}
+
+/**
+ * GET /devices/{id}/readings — historical readings, server-side bucketed.
+ * Empty buckets are omitted by the backend, so gaps are possible.
+ */
+export function getReadings(
+  deviceId: number,
+  params: { from: string; to: string; bucket: string; limit?: number },
+): Promise<Reading[]> {
+  const query = [
+    `from=${encodeURIComponent(params.from)}`,
+    `to=${encodeURIComponent(params.to)}`,
+    `bucket=${encodeURIComponent(params.bucket)}`,
+  ];
+  if (params.limit !== undefined) {
+    query.push(`limit=${encodeURIComponent(String(params.limit))}`);
+  }
+  return apiFetch<Reading[]>(`/devices/${deviceId}/readings?${query.join('&')}`);
 }
