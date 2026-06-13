@@ -96,7 +96,16 @@ export default function DashboardScreen() {
         data={data}
         keyExtractor={(item) => String(item.device.id)}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={<Text style={styles.heading}>Devices</Text>}
+        ListHeaderComponent={
+          <View style={styles.headerRow}>
+            <Text style={styles.heading}>Devices</Text>
+            <Pressable
+              style={({ pressed }) => [styles.addButton, pressed && styles.cardPressed]}
+              onPress={() => router.push('/provision')}>
+              <Text style={styles.addButtonText}>+ Add device</Text>
+            </Pressable>
+          </View>
+        }
         renderItem={({ item }) => (
           <DeviceCard
             entry={item}
@@ -137,11 +146,27 @@ const styles = StyleSheet.create({
     gap: 12,
     flexGrow: 1,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
   heading: {
     fontSize: 28,
     fontWeight: '700',
     color: '#000000',
-    marginBottom: 4,
+  },
+  addButton: {
+    backgroundColor: '#208AEF',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  addButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   card: {
     backgroundColor: '#ffffff',

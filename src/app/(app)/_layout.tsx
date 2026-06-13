@@ -10,11 +10,13 @@ export default function AppLayout() {
     return <Redirect href="/login" />;
   }
 
-  // The tab bar lives in the (tabs) group; device detail is pushed over it.
+  // The tab bar lives in the (tabs) group; device detail and provisioning are
+  // pushed over it.
   return (
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="device/[id]" options={{ headerShown: true }} />
+      <Stack.Screen name="provision" options={{ headerShown: true, presentation: 'modal' }} />
     </Stack>
   );
 }
