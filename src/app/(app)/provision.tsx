@@ -41,47 +41,49 @@ const CHECKLIST_STEPS = [
 ] as const;
 
 /**
- * Number of fully-completed steps implied by the latest progress status.
- * (Steps 1 & 2 complete together at RECEIVED, since RECEIVED both ends the
- * connect phase and is the "data received" event.)
+ * Per-row state derived ONLY from the statuses actually received this attempt —
+ * no inference/backfill. A row greens solely when its own message arrives, so a
+ * device that skips a step honestly shows that step un-ticked.
+ *
+ *  - "Connecting to device": done once ANY message arrived; active while the
+ *    received set is empty (post-commit, pre-first-message).
+ *  - "Data received":   done iff RECEIVED received.
+ *  - "Wifi connected":  done iff WIFI_OK received; active iff WIFI_CONNECTING
+ *    received but WIFI_OK not yet.
+ *  - "Server connected": done iff PROVISIONED received; active iff
+ *    MQTT_CONNECTING received but PROVISIONED not yet.
  */
-function doneCount(progress: ProvisioningStatus | null): number {
-  switch (progress) {
-    case 'RECEIVED':
-    case 'WIFI_CONNECTING':
-      return 2;
-    case 'WIFI_OK':
-    case 'MQTT_CONNECTING':
-      return 3;
-    case 'PROVISIONED':
-      return 4;
-    default:
-      return 0; // null / IDLE → still connecting
-  }
+function rowBaseStates(received: Set<ProvisioningStatus>): RowState[] {
+  const has = (s: ProvisioningStatus) => received.has(s);
+  return [
+    received.size > 0 ? 'done' : 'active',
+    has('RECEIVED') ? 'done' : 'pending',
+    has('WIFI_OK') ? 'done' : has('WIFI_CONNECTING') ? 'active' : 'pending',
+    has('PROVISIONED') ? 'done' : has('MQTT_CONNECTING') ? 'active' : 'pending',
+  ];
 }
 
 /**
- * Deterministic per-row state from the latest progress status + atomic outcome.
- * Exactly one row is 'active' while in progress; failure marks the right row.
+ * Overlay the atomic failure outcome onto the received-derived base states.
+ * Failure marks exactly one row 'failed'; rows whose success message arrived
+ * stay 'done', un-reached rows stay 'pending' (still no backfill). On success
+ * the base states are used as-is (no force-all-green).
  */
-function checklistStates(progress: ProvisioningStatus | null, outcome: Outcome | null): RowState[] {
-  if (outcome === 'success') return ['done', 'done', 'done', 'done'];
-  if (outcome === 'wifi_failed') return ['done', 'done', 'failed', 'pending'];
-  if (outcome === 'mqtt_failed') return ['done', 'done', 'done', 'failed'];
+function checklistStates(received: Set<ProvisioningStatus>, outcome: Outcome | null): RowState[] {
+  const states = rowBaseStates(received);
+  if (outcome == null || outcome === 'success') return states;
 
-  const done = doneCount(progress);
-
-  if (outcome === 'error') {
-    // Mark the current frontier row failed; earlier rows done, later pending.
-    const failedIdx = Math.min(done, CHECKLIST_STEPS.length - 1);
-    return CHECKLIST_STEPS.map((_, i) =>
-      i < failedIdx ? 'done' : i === failedIdx ? 'failed' : 'pending',
-    );
+  if (outcome === 'wifi_failed') {
+    states[2] = 'failed';
+  } else if (outcome === 'mqtt_failed') {
+    states[3] = 'failed';
+  } else {
+    // Generic error / timeout / BLE error: fail the current frontier (the first
+    // not-yet-done row). Earlier rows stay done; later rows keep their base.
+    const frontier = states.findIndex((s) => s !== 'done');
+    if (frontier >= 0) states[frontier] = 'failed';
   }
-
-  // In progress: rows before the frontier done, the frontier active, rest pending.
-  const activeIdx = Math.min(done, CHECKLIST_STEPS.length - 1);
-  return CHECKLIST_STEPS.map((_, i) => (i < done ? 'done' : i === activeIdx ? 'active' : 'pending'));
+  return states;
 }
 
 function ChecklistIcon({ state }: { state: RowState }) {
@@ -110,13 +112,13 @@ function ChecklistIcon({ state }: { state: RowState }) {
 }
 
 function ProvisionChecklist({
-  progress,
+  received,
   outcome,
 }: {
-  progress: ProvisioningStatus | null;
+  received: Set<ProvisioningStatus>;
   outcome: Outcome | null;
 }) {
-  const states = checklistStates(progress, outcome);
+  const states = checklistStates(received, outcome);
   return (
     <View style={styles.checklistCard}>
       {CHECKLIST_STEPS.map((label, i) => {
@@ -157,8 +159,8 @@ export default function ProvisionScreen() {
   const [token, setToken] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Provisioning progression
-  const [progress, setProgress] = useState<ProvisioningStatus | null>(null);
+  // Provisioning progression — records which statuses actually arrived (no inference).
+  const [received, setReceived] = useState<Set<ProvisioningStatus>>(new Set());
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const controllerRef = useRef<ProvisionController | null>(null);
@@ -221,7 +223,7 @@ export default function ProvisionScreen() {
     controllerRef.current = null;
 
     // Clean slate for THIS attempt — checklist starts from nothing.
-    setProgress(null);
+    setReceived(new Set());
     setOutcome(null);
     setErrorMessage(null);
     setStep('provisioning');
@@ -240,7 +242,13 @@ export default function ProvisionScreen() {
       (s) => {
         // Terminal failures are handled atomically via onError below.
         if (s === 'WIFI_FAILED' || s === 'MQTT_FAILED' || s === 'ERROR') return;
-        setProgress(s);
+        // Record the actual message received — the checklist greens only from this.
+        setReceived((prev) => {
+          if (prev.has(s)) return prev;
+          const next = new Set(prev);
+          next.add(s);
+          return next;
+        });
         if (s === 'PROVISIONED') setOutcome('success');
       },
       (message, reason) => {
@@ -260,7 +268,7 @@ export default function ProvisionScreen() {
   const retry = useCallback(async () => {
     await controllerRef.current?.cancel();
     controllerRef.current = null;
-    setProgress(null);
+    setReceived(new Set());
     setOutcome(null);
     setErrorMessage(null);
     setStep('form'); // values retained
@@ -304,7 +312,7 @@ export default function ProvisionScreen() {
           />
         ) : (
           <ProvisioningStep
-            progress={progress}
+            received={received}
             outcome={outcome}
             errorMessage={errorMessage}
             onCancel={closeAndExit}
@@ -476,14 +484,14 @@ function FormStep({
 /* ---------- Step C/D: Provisioning checklist + merged result ---------- */
 
 function ProvisioningStep({
-  progress,
+  received,
   outcome,
   errorMessage,
   onCancel,
   onDone,
   onRetry,
 }: {
-  progress: ProvisioningStatus | null;
+  received: Set<ProvisioningStatus>;
   outcome: Outcome | null;
   errorMessage: string | null;
   onCancel: () => void;
@@ -510,7 +518,7 @@ function ProvisioningStep({
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Setting up your sensor</Text>
 
-      <ProvisionChecklist progress={progress} outcome={outcome} />
+      <ProvisionChecklist received={received} outcome={outcome} />
 
       {outcome === 'success' ? (
         <View style={styles.footer}>

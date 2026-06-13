@@ -316,6 +316,7 @@ export async function connectAndProvision(
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let finished = false; // a terminal outcome (success OR failure) has been delivered
   let provisioned = false;
+  let committed = false; // ignore notifications until our own commit has landed
 
   const clearTimer = () => {
     if (timeoutHandle) {
@@ -389,11 +390,17 @@ export async function connectAndProvision(
       fail('The device disconnected before setup finished.');
     });
 
-    // Step 6: subscribe to status notifications BEFORE writing.
+    // Step 6: subscribe to status notifications BEFORE writing. We NEVER read
+    // the status characteristic — the device leaves it holding its last value
+    // (e.g. "PROVISIONED") between runs, so a read would short-circuit a fresh
+    // attempt. We act ONLY on notifications, and only those received AFTER our
+    // own commit lands (some stacks emit the current value when notifications
+    // are enabled — that pre-commit value must be ignored).
     statusSub = device.monitorCharacteristicForService(
       SERVICE_UUID,
       CHAR_STATUS,
       (error, characteristic) => {
+        if (!committed) return; // ignore any pre-commit notification entirely
         if (error) {
           if (finished) return; // expected cancellation error after we finish
           fail(describeBleError(error));
@@ -407,17 +414,6 @@ export async function connectAndProvision(
         }
       },
     );
-
-    // Optionally read the current status once.
-    try {
-      const initial = await device.readCharacteristicForService(SERVICE_UUID, CHAR_STATUS);
-      if (initial.value) {
-        const decoded = decodeBase64(initial.value).trim();
-        if (isProvisioningStatus(decoded)) onStatus(decoded);
-      }
-    } catch {
-      // non-fatal — notifications will drive the UI
-    }
 
     if (finished) {
       // A disconnect/terminal arrived during setup; don't write.
@@ -455,6 +451,9 @@ export async function connectAndProvision(
       CHAR_COMMIT,
       COMMIT_VALUE_BASE64,
     );
+
+    // From here on, status notifications are real provisioning progress.
+    committed = true;
 
     // Step 9: arm the post-commit timeout if no terminal status arrives.
     if (!finished) {
