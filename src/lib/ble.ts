@@ -65,6 +65,9 @@ export interface ProvisionController {
   cancel: () => Promise<void>;
 }
 
+/** Structured reason accompanying a terminal failure, for the result screen. */
+export type ProvisionFailureReason = 'wifi_failed' | 'mqtt_failed' | 'error';
+
 /** After commit, give the device this long to reach a terminal status. */
 const PROVISION_TIMEOUT_MS = 60_000;
 
@@ -292,14 +295,15 @@ export function scanForDevices(
  *
  * onStatus fires for every status update (including terminals). onError fires
  * for BLE failures, the device's terminal failure statuses, premature
- * disconnects, and the post-commit timeout. Returns a controller whose cancel()
- * disconnects and removes all subscriptions.
+ * disconnects, and the post-commit timeout — with a structured `reason` so the
+ * caller can show the right result screen without re-deriving it from status.
+ * Returns a controller whose cancel() disconnects and removes all subscriptions.
  */
 export async function connectAndProvision(
   deviceId: string,
   creds: Credentials,
   onStatus: (status: ProvisioningStatus) => void,
-  onError: (message: string) => void,
+  onError: (message: string, reason: ProvisionFailureReason) => void,
 ): Promise<ProvisionController> {
   const m = getManager();
   let statusSub: Subscription | null = null;
@@ -332,11 +336,11 @@ export async function connectAndProvision(
     }
   };
 
-  const fail = (message: string) => {
+  const fail = (message: string, reason: ProvisionFailureReason = 'error') => {
     if (finished) return;
     finished = true;
     clearTimer();
-    onError(message);
+    onError(message, reason);
     void cleanup();
   };
 
@@ -352,11 +356,11 @@ export async function connectAndProvision(
       statusSub?.remove();
       statusSub = null;
     } else if (status === 'WIFI_FAILED') {
-      fail('Couldn’t connect to wifi — check the network name and password.');
+      fail('Couldn’t connect to wifi — check the network name and password.', 'wifi_failed');
     } else if (status === 'MQTT_FAILED') {
-      fail('Connected to wifi but couldn’t reach the server.');
+      fail('Connected to wifi but couldn’t reach the server.', 'mqtt_failed');
     } else if (status === 'ERROR') {
-      fail('The device reported an error during setup.');
+      fail('The device reported an error during setup.', 'error');
     }
   };
 

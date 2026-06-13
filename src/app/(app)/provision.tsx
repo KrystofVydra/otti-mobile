@@ -140,21 +140,15 @@ export default function ProvisionScreen() {
           setStep('result');
         }
       },
-      (message) => {
-        // Map the message back to an outcome where we can; default to generic error.
+      (message, reason) => {
+        // Outcome is delivered atomically with the failure — no re-derivation
+        // from `status`, so a wifi failure always reaches the wifi result screen.
         setErrorMessage(message);
-        setOutcome((prev) => prev ?? 'error');
+        setOutcome(reason);
         setStep('result');
       },
     );
   }, [selected, ssid, password, token]);
-
-  // Refine the outcome for the result screen from the latest failure status.
-  useEffect(() => {
-    if (step !== 'result') return;
-    if (status === 'WIFI_FAILED') setOutcome('wifi_failed');
-    else if (status === 'MQTT_FAILED') setOutcome('mqtt_failed');
-  }, [step, status]);
 
   const closeAndExit = useCallback(async () => {
     stopScan();
