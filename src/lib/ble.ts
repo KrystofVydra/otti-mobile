@@ -48,10 +48,15 @@ function isProvisioningStatus(value: string): value is ProvisioningStatus {
   return (ALL_STATUSES as readonly string[]).includes(value);
 }
 
+/**
+ * Provisioning credentials. All fields are optional: the wifi pair and the
+ * token are independently sendable. A characteristic is only written if its
+ * value is a non-empty string; commit is always sent afterwards.
+ */
 export interface Credentials {
-  wifiSsid: string;
-  wifiPassword: string;
-  mqttToken: string;
+  wifiSsid?: string;
+  wifiPassword?: string;
+  mqttToken?: string;
 }
 
 export interface ScannedDevice {
@@ -419,24 +424,32 @@ export async function connectAndProvision(
       return { cancel: cleanup };
     }
 
-    // Step 7: write the three credentials (UTF-8 → Base64, Write With Response).
-    await device.writeCharacteristicWithResponseForService(
-      SERVICE_UUID,
-      CHAR_WIFI_SSID,
-      encodeBase64(creds.wifiSsid),
-    );
-    await device.writeCharacteristicWithResponseForService(
-      SERVICE_UUID,
-      CHAR_WIFI_PASSWORD,
-      encodeBase64(creds.wifiPassword),
-    );
-    await device.writeCharacteristicWithResponseForService(
-      SERVICE_UUID,
-      CHAR_MQTT_TOKEN,
-      encodeBase64(creds.mqttToken),
-    );
+    // Step 7: write ONLY the characteristics whose values are non-empty
+    // (UTF-8 → Base64, Write With Response). The wifi pair and the token are
+    // independently optional; the caller enforces the wifi ssid+password pairing.
+    if (creds.wifiSsid) {
+      await device.writeCharacteristicWithResponseForService(
+        SERVICE_UUID,
+        CHAR_WIFI_SSID,
+        encodeBase64(creds.wifiSsid),
+      );
+    }
+    if (creds.wifiPassword) {
+      await device.writeCharacteristicWithResponseForService(
+        SERVICE_UUID,
+        CHAR_WIFI_PASSWORD,
+        encodeBase64(creds.wifiPassword),
+      );
+    }
+    if (creds.mqttToken) {
+      await device.writeCharacteristicWithResponseForService(
+        SERVICE_UUID,
+        CHAR_MQTT_TOKEN,
+        encodeBase64(creds.mqttToken),
+      );
+    }
 
-    // Step 8: commit (single 0x01 byte, Write With Response).
+    // Step 8: commit (single 0x01 byte, Write With Response) — ALWAYS sent.
     await device.writeCharacteristicWithResponseForService(
       SERVICE_UUID,
       CHAR_COMMIT,

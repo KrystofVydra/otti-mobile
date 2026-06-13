@@ -23,26 +23,121 @@ import {
 } from '@/lib/ble';
 
 const ACCENT = '#208AEF';
+const SUCCESS = '#1FA463';
+const FAILURE = '#D7263D';
 
-type Step = 'scan' | 'form' | 'progress' | 'result';
+type Step = 'scan' | 'form' | 'provisioning';
 type Outcome = 'success' | 'wifi_failed' | 'mqtt_failed' | 'error';
 
-/** Friendly progress label for a status update. */
-function progressLabel(status: ProvisioningStatus | null): string {
-  switch (status) {
+/* ---- Fixed four-step checklist (device always runs the full sequence) ---- */
+
+type RowState = 'done' | 'active' | 'failed' | 'pending';
+
+const CHECKLIST_STEPS = [
+  'Connecting to device',
+  'Data received',
+  'Wifi connected',
+  'Server connected',
+] as const;
+
+/**
+ * Number of fully-completed steps implied by the latest progress status.
+ * (Steps 1 & 2 complete together at RECEIVED, since RECEIVED both ends the
+ * connect phase and is the "data received" event.)
+ */
+function doneCount(progress: ProvisioningStatus | null): number {
+  switch (progress) {
     case 'RECEIVED':
-      return 'Device received the settings…';
     case 'WIFI_CONNECTING':
-      return 'Connecting to wifi…';
+      return 2;
     case 'WIFI_OK':
-      return 'Wifi connected…';
     case 'MQTT_CONNECTING':
-      return 'Connecting to the server…';
+      return 3;
     case 'PROVISIONED':
-      return 'All set!';
+      return 4;
     default:
-      return 'Connecting to device…';
+      return 0; // null / IDLE → still connecting
   }
+}
+
+/**
+ * Deterministic per-row state from the latest progress status + atomic outcome.
+ * Exactly one row is 'active' while in progress; failure marks the right row.
+ */
+function checklistStates(progress: ProvisioningStatus | null, outcome: Outcome | null): RowState[] {
+  if (outcome === 'success') return ['done', 'done', 'done', 'done'];
+  if (outcome === 'wifi_failed') return ['done', 'done', 'failed', 'pending'];
+  if (outcome === 'mqtt_failed') return ['done', 'done', 'done', 'failed'];
+
+  const done = doneCount(progress);
+
+  if (outcome === 'error') {
+    // Mark the current frontier row failed; earlier rows done, later pending.
+    const failedIdx = Math.min(done, CHECKLIST_STEPS.length - 1);
+    return CHECKLIST_STEPS.map((_, i) =>
+      i < failedIdx ? 'done' : i === failedIdx ? 'failed' : 'pending',
+    );
+  }
+
+  // In progress: rows before the frontier done, the frontier active, rest pending.
+  const activeIdx = Math.min(done, CHECKLIST_STEPS.length - 1);
+  return CHECKLIST_STEPS.map((_, i) => (i < done ? 'done' : i === activeIdx ? 'active' : 'pending'));
+}
+
+function ChecklistIcon({ state }: { state: RowState }) {
+  if (state === 'active') {
+    return (
+      <View style={styles.iconWrap}>
+        <ActivityIndicator size="small" color={ACCENT} />
+      </View>
+    );
+  }
+  if (state === 'done') {
+    return (
+      <View style={[styles.iconWrap, styles.iconDone]}>
+        <Text style={styles.iconDoneMark}>✓</Text>
+      </View>
+    );
+  }
+  if (state === 'failed') {
+    return (
+      <View style={[styles.iconWrap, styles.iconFailed]}>
+        <Text style={styles.iconFailedMark}>✕</Text>
+      </View>
+    );
+  }
+  return <View style={[styles.iconWrap, styles.iconPending]} />;
+}
+
+function ProvisionChecklist({
+  progress,
+  outcome,
+}: {
+  progress: ProvisioningStatus | null;
+  outcome: Outcome | null;
+}) {
+  const states = checklistStates(progress, outcome);
+  return (
+    <View style={styles.checklistCard}>
+      {CHECKLIST_STEPS.map((label, i) => {
+        const state = states[i];
+        return (
+          <View key={label} style={styles.checkRow}>
+            <ChecklistIcon state={state} />
+            <Text
+              style={[
+                styles.checkLabel,
+                state === 'pending' && styles.checkLabelPending,
+                state === 'done' && styles.checkLabelDone,
+                state === 'failed' && styles.checkLabelFailed,
+              ]}>
+              {label}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
 }
 
 export default function ProvisionScreen() {
@@ -62,8 +157,8 @@ export default function ProvisionScreen() {
   const [token, setToken] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Provisioning
-  const [status, setStatus] = useState<ProvisioningStatus | null>(null);
+  // Provisioning progression
+  const [progress, setProgress] = useState<ProvisioningStatus | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const controllerRef = useRef<ProvisionController | null>(null);
@@ -84,9 +179,7 @@ export default function ProvisionScreen() {
     }
     stopScanRef.current = scanForDevices(
       (device) => {
-        setDevices((prev) =>
-          prev.some((d) => d.id === device.id) ? prev : [...prev, device],
-        );
+        setDevices((prev) => (prev.some((d) => d.id === device.id) ? prev : [...prev, device]));
       },
       (message) => setScanError(message),
     );
@@ -121,31 +214,38 @@ export default function ProvisionScreen() {
 
   const startProvisioning = useCallback(async () => {
     if (!selected) return;
-    setStatus(null);
-    setOutcome(null);
-    setErrorMessage(null);
-    setStep('progress');
 
-    // Tear down any previous session before starting a new one (retry case).
+    // Fully tear down any prior session BEFORE touching new state, so a stale
+    // notification from the old connection can't leak into this attempt.
     await controllerRef.current?.cancel();
     controllerRef.current = null;
 
+    // Clean slate for THIS attempt — checklist starts from nothing.
+    setProgress(null);
+    setOutcome(null);
+    setErrorMessage(null);
+    setStep('provisioning');
+
+    // Send only the field groups the user filled in; commit is always sent.
+    const wifiPair = ssid.trim().length > 0 && password.length > 0;
+    const creds = {
+      wifiSsid: wifiPair ? ssid.trim() : undefined,
+      wifiPassword: wifiPair ? password : undefined,
+      mqttToken: token.trim().length > 0 ? token.trim() : undefined,
+    };
+
     controllerRef.current = await connectAndProvision(
       selected.id,
-      { wifiSsid: ssid.trim(), wifiPassword: password, mqttToken: token.trim() },
+      creds,
       (s) => {
-        setStatus(s);
-        if (s === 'PROVISIONED') {
-          setOutcome('success');
-          setStep('result');
-        }
+        // Terminal failures are handled atomically via onError below.
+        if (s === 'WIFI_FAILED' || s === 'MQTT_FAILED' || s === 'ERROR') return;
+        setProgress(s);
+        if (s === 'PROVISIONED') setOutcome('success');
       },
       (message, reason) => {
-        // Outcome is delivered atomically with the failure — no re-derivation
-        // from `status`, so a wifi failure always reaches the wifi result screen.
         setErrorMessage(message);
         setOutcome(reason);
-        setStep('result');
       },
     );
   }, [selected, ssid, password, token]);
@@ -160,13 +260,16 @@ export default function ProvisionScreen() {
   const retry = useCallback(async () => {
     await controllerRef.current?.cancel();
     controllerRef.current = null;
-    setStatus(null);
+    setProgress(null);
     setOutcome(null);
     setErrorMessage(null);
     setStep('form'); // values retained
   }, []);
 
-  const canSubmit = ssid.trim().length > 0 && password.length > 0 && token.trim().length > 0;
+  // Send is enabled with a complete wifi pair, OR a token, OR both.
+  const wifiPairFilled = ssid.trim().length > 0 && password.length > 0;
+  const tokenFilled = token.trim().length > 0;
+  const canSubmit = wifiPairFilled || tokenFilled;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
@@ -199,12 +302,12 @@ export default function ProvisionScreen() {
             onSubmit={startProvisioning}
             onCancel={closeAndExit}
           />
-        ) : step === 'progress' ? (
-          <ProgressStep label={progressLabel(status)} onCancel={closeAndExit} />
         ) : (
-          <ResultStep
+          <ProvisioningStep
+            progress={progress}
             outcome={outcome}
             errorMessage={errorMessage}
+            onCancel={closeAndExit}
             onDone={closeAndExit}
             onRetry={retry}
           />
@@ -308,7 +411,9 @@ function FormStep({
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Wifi & server</Text>
-      <Text style={styles.subtitle}>Sending settings to {deviceName}.</Text>
+      <Text style={styles.subtitle}>
+        Sending settings to {deviceName}. Enter wifi, a token, or both.
+      </Text>
 
       <View style={styles.form}>
         <Text style={styles.label}>Wifi name (SSID)</Text>
@@ -339,7 +444,7 @@ function FormStep({
           </Pressable>
         </View>
 
-        <Text style={styles.label}>MQTT token</Text>
+        <Text style={styles.label}>Token</Text>
         <TextInput
           style={styles.input}
           value={token}
@@ -368,84 +473,83 @@ function FormStep({
   );
 }
 
-/* ---------- Step C: Progress ---------- */
+/* ---------- Step C/D: Provisioning checklist + merged result ---------- */
 
-function ProgressStep({ label, onCancel }: { label: string; onCancel: () => void }) {
-  return (
-    <View style={styles.centered}>
-      <ActivityIndicator size="large" />
-      <Text style={styles.progressLabel}>{label}</Text>
-      <Text style={styles.subtitle}>This can take up to a minute.</Text>
-      <View style={styles.spacer} />
-      <Pressable style={styles.linkButton} onPress={onCancel}>
-        <Text style={styles.linkButtonText}>Cancel</Text>
-      </Pressable>
-    </View>
-  );
-}
-
-/* ---------- Step D: Result ---------- */
-
-function ResultStep({
+function ProvisioningStep({
+  progress,
   outcome,
   errorMessage,
+  onCancel,
   onDone,
   onRetry,
 }: {
+  progress: ProvisioningStatus | null;
   outcome: Outcome | null;
   errorMessage: string | null;
+  onCancel: () => void;
   onDone: () => void;
   onRetry: () => void;
 }) {
-  if (outcome === 'success') {
-    return (
-      <View style={styles.centered}>
-        <View style={[styles.resultBadge, { backgroundColor: '#E6F6EE' }]}>
-          <Text style={[styles.resultBadgeMark, { color: '#1FA463' }]}>✓</Text>
-        </View>
-        <Text style={styles.title}>Device is set up</Text>
-        <Text style={styles.subtitle}>Your sensor is connected and reporting.</Text>
-        <View style={styles.spacer} />
-        <Pressable
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-          onPress={onDone}>
-          <Text style={styles.primaryButtonText}>Done</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  const failed = outcome != null && outcome !== 'success';
 
-  const heading =
+  const failHeading =
     outcome === 'wifi_failed'
       ? 'Couldn’t connect to wifi'
       : outcome === 'mqtt_failed'
         ? 'Couldn’t reach the server'
         : 'Setup didn’t finish';
 
-  const detail =
+  const failDetail =
     outcome === 'wifi_failed'
       ? 'Check the network name and password and try again.'
       : outcome === 'mqtt_failed'
-        ? 'The sensor joined wifi but couldn’t reach the server. Check the MQTT token and try again.'
+        ? 'The sensor joined wifi but couldn’t reach the server. Check the token and try again.'
         : errorMessage ?? 'Something went wrong. Please try again.';
 
   return (
-    <View style={styles.centered}>
-      <View style={[styles.resultBadge, { backgroundColor: '#FCE8EC' }]}>
-        <Text style={[styles.resultBadgeMark, { color: '#D7263D' }]}>!</Text>
-      </View>
-      <Text style={styles.title}>{heading}</Text>
-      <Text style={styles.subtitle}>{detail}</Text>
-      <View style={styles.spacer} />
-      <Pressable
-        style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-        onPress={onRetry}>
-        <Text style={styles.primaryButtonText}>Retry</Text>
-      </Pressable>
-      <Pressable style={styles.linkButton} onPress={onDone}>
-        <Text style={styles.linkButtonText}>Cancel</Text>
-      </Pressable>
-    </View>
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.title}>Setting up your sensor</Text>
+
+      <ProvisionChecklist progress={progress} outcome={outcome} />
+
+      {outcome === 'success' ? (
+        <View style={styles.footer}>
+          <View style={[styles.resultBadge, { backgroundColor: '#E6F6EE' }]}>
+            <Text style={[styles.resultBadgeMark, { color: SUCCESS }]}>✓</Text>
+          </View>
+          <Text style={styles.footerHeading}>Device is set up</Text>
+          <Text style={styles.subtitle}>Your sensor is connected and reporting.</Text>
+          <Pressable
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+            onPress={onDone}>
+            <Text style={styles.primaryButtonText}>Done</Text>
+          </Pressable>
+        </View>
+      ) : failed ? (
+        <View style={styles.footer}>
+          <View style={[styles.resultBadge, { backgroundColor: '#FCE8EC' }]}>
+            <Text style={[styles.resultBadgeMark, { color: FAILURE }]}>!</Text>
+          </View>
+          <Text style={styles.footerHeading}>{failHeading}</Text>
+          <Text style={styles.subtitle}>{failDetail}</Text>
+          <Pressable
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+            onPress={onRetry}>
+            <Text style={styles.primaryButtonText}>Retry</Text>
+          </Pressable>
+          <Pressable style={styles.linkButton} onPress={onCancel}>
+            <Text style={styles.linkButtonText}>Cancel</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.footer}>
+          <Text style={styles.subtitle}>This can take up to a minute.</Text>
+          <Pressable style={styles.linkButton} onPress={onCancel}>
+            <Text style={styles.linkButtonText}>Cancel</Text>
+          </Pressable>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
@@ -458,13 +562,6 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     padding: 20,
-    gap: 12,
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
     gap: 12,
   },
   title: {
@@ -565,9 +662,71 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  progressLabel: {
-    fontSize: 18,
+  // Checklist
+  checklistCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ECEDEF',
+    padding: 16,
+    gap: 18,
+  },
+  checkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  iconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconDone: {
+    backgroundColor: SUCCESS,
+  },
+  iconDoneMark: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  iconFailed: {
+    backgroundColor: FAILURE,
+  },
+  iconFailedMark: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  iconPending: {
+    borderWidth: 2,
+    borderColor: '#D5D8DC',
+  },
+  checkLabel: {
+    fontSize: 16,
     fontWeight: '600',
+    color: '#000000',
+  },
+  checkLabelDone: {
+    color: SUCCESS,
+  },
+  checkLabelFailed: {
+    color: FAILURE,
+  },
+  checkLabelPending: {
+    color: '#9AA0A6',
+    fontWeight: '500',
+  },
+  // Footer (result merged below the checklist)
+  footer: {
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 8,
+  },
+  footerHeading: {
+    fontSize: 20,
+    fontWeight: '700',
     color: '#000000',
     textAlign: 'center',
   },
