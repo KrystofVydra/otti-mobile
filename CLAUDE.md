@@ -34,14 +34,51 @@ Built with React Native + Expo (SDK 56), TypeScript, and Expo Router.
   launch (decide whether to show login or go straight to the dashboard).
 - `POST /auth/logout` — invalidates the session server-side.
 
-### Devices & readings
+### Topology (post-rework)
 
-- `GET /devices` — list the user's devices, each with its latest reading.
-- `GET /devices/{id}` — a single device.
-- `GET /devices/{id}/readings/latest` — most recent reading for a device.
-- `GET /devices/{id}/readings?from=...&to=...&bucket=1m|5m|15m|1h|6h|1d&limit=N`
-  — historical readings. The `bucket` param triggers server-side TimescaleDB
-  time-bucket aggregation. Planned chart ranges: **1h, 6h, 24h, 7d, 30d.**
+The old flat "device = sensor" model is **gone**. There is now a three-level
+hierarchy, and all `/devices/*` endpoints are replaced by `/controllers/*`:
+
+```
+gateway (ESP32, MQTT identity; background infra — user mostly doesn't see it)
+  └── controller (1+ per gateway; each a physical fridge/freezer "box")  ← PRIMARY entity
+        └── node (1-5 per controller; individual temp/lux sensor inside)
+```
+
+**v1 stance:** controllers are the primary user-facing entity (dashboard list +
+detail). Nodes are shown inside the controller detail. Gateways are background
+metadata only — modeled in types for v2, but **no gateway UI** in v1.
+
+### Controllers, nodes & readings
+
+- `GET /controllers` — dashboard list. Array of controller entries, each with a
+  rolled-up `latest` snapshot:
+  - controller: `id`, `sn`, `name`, `location` (nullable), `gateway`,
+    `node_count`, `last_seen_at` (nullable).
+  - `latest` (nullable — null if never reported): `time`,
+    `temperature_avg` (nullable; null if no node has a temp yet),
+    `battery_pct` (int 0..100, nullable), `door_open` (nullable),
+    `any_node_error`.
+  - `gateway`: `id`, `device_key`, `name`, `location` (nullable).
+- `GET /controllers/{id}` — detail: controller fields + `gateway` + `nodes[]` +
+  `latest_telemetry` (nullable).
+  - each node: `id`, `node_index`, `name` (nullable → fall back to
+    "Node {node_index}"), `has_lux`, `last_seen_at` (nullable), and `latest`
+    (nullable): `{ time, temperature (nullable), lux (nullable when no lux/no
+    reading), err }` where `err` is `null | 'sensor_temp' | 'sensor_lux' |
+    'sensor_both' | 'comms'`.
+  - `latest_telemetry` (nullable): `{ time, battery_pct, door_open }`.
+- `GET /controllers/{id}/readings?from=...&to=...&bucket=1m|5m|15m|1h|6h|1d&limit=N`
+  — averaged temperature time-series. Array of `{ time, temperature_avg }`. The
+  `bucket` param triggers server-side TimescaleDB time-bucket aggregation. Chart
+  ranges: **1h, 6h, 24h, 7d, 30d.**
+- `GET /controllers/{id}/telemetry?from=...&to=...&bucket=...` — battery + door
+  time-series. Array of `{ time, battery_pct, door_open }`. (Not charted in v1;
+  typed for completeness.)
+
+> Known backend bug (being fixed separately): readings/telemetry currently
+> return all points sharing one timestamp. Build against the **intended** shape
+> (distinct ascending `time`, one value per bucket) — no client workarounds.
 
 ## Token storage
 

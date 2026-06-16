@@ -11,7 +11,14 @@
  *    mistaken for an expired session.
  */
 import { clearToken, getToken } from '@/lib/tokenStore';
-import type { DeviceListEntry, LoginResponse, Reading, User } from '@/lib/types';
+import type {
+  ControllerDetail,
+  ControllerListEntry,
+  LoginResponse,
+  Telemetry,
+  TempReading,
+  User,
+} from '@/lib/types';
 
 /** Base URL for the backend. Change here to point at another environment. */
 export const API_BASE_URL = 'https://api.otti.cz';
@@ -130,21 +137,10 @@ export function logout(): Promise<void> {
   return apiFetch<void>('/auth/logout', { method: 'POST' });
 }
 
-/* ---- Devices ---- */
+/* ---- Controllers ---- */
 
-/** GET /devices — the user's devices, each with its latest reading. */
-export function getDevices(): Promise<DeviceListEntry[]> {
-  return apiFetch<DeviceListEntry[]>('/devices');
-}
-
-/**
- * GET /devices/{id}/readings — historical readings, server-side bucketed.
- * Empty buckets are omitted by the backend, so gaps are possible.
- */
-export function getReadings(
-  deviceId: number,
-  params: { from: string; to: string; bucket: string; limit?: number },
-): Promise<Reading[]> {
+/** Build a URL-encoded readings/telemetry query string. */
+function timeSeriesQuery(params: { from: string; to: string; bucket: string; limit?: number }): string {
   const query = [
     `from=${encodeURIComponent(params.from)}`,
     `to=${encodeURIComponent(params.to)}`,
@@ -153,5 +149,37 @@ export function getReadings(
   if (params.limit !== undefined) {
     query.push(`limit=${encodeURIComponent(String(params.limit))}`);
   }
-  return apiFetch<Reading[]>(`/devices/${deviceId}/readings?${query.join('&')}`);
+  return query.join('&');
+}
+
+/** GET /controllers — the user's controllers, each with a rolled-up latest snapshot. */
+export function getControllers(): Promise<ControllerListEntry[]> {
+  return apiFetch<ControllerListEntry[]>('/controllers');
+}
+
+/** GET /controllers/{id} — a single controller with its nodes + latest telemetry. */
+export function getController(id: number): Promise<ControllerDetail> {
+  return apiFetch<ControllerDetail>(`/controllers/${id}`);
+}
+
+/**
+ * GET /controllers/{id}/readings — averaged temperature time-series,
+ * server-side bucketed. Empty buckets are omitted, so gaps are possible.
+ */
+export function getControllerReadings(
+  id: number,
+  params: { from: string; to: string; bucket: string; limit?: number },
+): Promise<TempReading[]> {
+  return apiFetch<TempReading[]>(`/controllers/${id}/readings?${timeSeriesQuery(params)}`);
+}
+
+/**
+ * GET /controllers/{id}/telemetry — battery + door time-series, server-side
+ * bucketed. (Not charted in v1; provided for completeness.)
+ */
+export function getControllerTelemetry(
+  id: number,
+  params: { from: string; to: string; bucket: string; limit?: number },
+): Promise<Telemetry[]> {
+  return apiFetch<Telemetry[]>(`/controllers/${id}/telemetry?${timeSeriesQuery(params)}`);
 }
