@@ -146,9 +146,9 @@ export function useNotificationSettings() {
 }
 
 /**
- * Update one kind's setting. Optimistically applies the partial body to the
- * cached row (instant toggle), rolls back on error, and resyncs the row from
- * the server's full returned entry on success.
+ * Update one kind's setting (per-kind PATCH; partial body). Saves are explicit
+ * and batched by the settings screen, so there's no optimistic update here — on
+ * success we just sync that row in the cache from the server's full entry.
  */
 export function useUpdateNotificationSetting() {
   const queryClient = useQueryClient();
@@ -160,32 +160,6 @@ export function useUpdateNotificationSetting() {
       kind: string;
       body: { enabled?: boolean; thresholds?: Record<string, number> };
     }) => updateNotificationSetting(kind, body),
-
-    onMutate: async ({ kind, body }) => {
-      await queryClient.cancelQueries({ queryKey: SETTINGS_KEY });
-      const previous = queryClient.getQueryData<NotificationSettingEntry[]>(SETTINGS_KEY);
-      if (previous) {
-        queryClient.setQueryData<NotificationSettingEntry[]>(
-          SETTINGS_KEY,
-          previous.map((entry) =>
-            entry.kind === kind
-              ? {
-                  ...entry,
-                  ...(body.enabled !== undefined ? { enabled: body.enabled } : null),
-                  ...(body.thresholds !== undefined ? { thresholds: body.thresholds } : null),
-                }
-              : entry,
-          ),
-        );
-      }
-      return { previous };
-    },
-
-    onError: (_error, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(SETTINGS_KEY, context.previous);
-      }
-    },
 
     onSuccess: (updated) => {
       queryClient.setQueryData<NotificationSettingEntry[]>(SETTINGS_KEY, (old) =>
