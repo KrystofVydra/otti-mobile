@@ -16,6 +16,7 @@ export default function AppLayout() {
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="controller/[id]" options={{ headerShown: true }} />
+      <Stack.Screen name="notification-settings" options={{ headerShown: true }} />
       <Stack.Screen name="provision" options={{ headerShown: true, presentation: 'modal' }} />
     </Stack>
   );

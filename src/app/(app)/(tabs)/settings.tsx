@@ -1,14 +1,15 @@
+import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/lib/auth';
 
 /**
- * Minimal Settings tab. For now it shows the signed-in user and offers logout;
- * real settings come later. (Replaced the create-expo-app "explore" demo tab.)
+ * Settings tab: signed-in user, a link to notification settings, and logout.
  */
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
+  const router = useRouter();
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -20,6 +21,13 @@ export default function SettingsScreen() {
           <Text style={styles.name}>{user?.display_name ?? '—'}</Text>
           <Text style={styles.email}>{user?.email ?? '—'}</Text>
         </View>
+
+        <Pressable
+          style={({ pressed }) => [styles.linkRow, pressed && styles.buttonPressed]}
+          onPress={() => router.push('/notification-settings')}>
+          <Text style={styles.linkRowText}>Notification settings</Text>
+          <Text style={styles.chevron}>›</Text>
+        </Pressable>
 
         <Pressable
           style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
@@ -53,6 +61,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ECEDEF',
     gap: 4,
+  },
+  linkRow: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ECEDEF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  linkRowText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  chevron: {
+    fontSize: 22,
+    color: '#C0C4CA',
   },
   label: {
     fontSize: 14,

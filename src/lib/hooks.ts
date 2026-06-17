@@ -10,12 +10,14 @@ import {
   getControllerTelemetry,
   getControllers,
   getNotifications,
+  getNotificationSettings,
   getUnreadCount,
   markAllNotificationsRead,
   markNotificationRead,
+  updateNotificationSetting,
 } from '@/lib/api';
 import { getRange, type RangeKey } from '@/lib/ranges';
-import type { NotificationStatus } from '@/lib/types';
+import type { NotificationSettingEntry, NotificationStatus } from '@/lib/types';
 
 /**
  * The user's controllers with their rolled-up latest snapshots.
@@ -130,5 +132,65 @@ export function useMarkAllRead() {
   return useMutation({
     mutationFn: markAllNotificationsRead,
     onSuccess: invalidate,
+  });
+}
+
+const SETTINGS_KEY = ['notificationSettings'] as const;
+
+/** Per-kind notification settings (enable + thresholds). */
+export function useNotificationSettings() {
+  return useQuery({
+    queryKey: SETTINGS_KEY,
+    queryFn: getNotificationSettings,
+  });
+}
+
+/**
+ * Update one kind's setting. Optimistically applies the partial body to the
+ * cached row (instant toggle), rolls back on error, and resyncs the row from
+ * the server's full returned entry on success.
+ */
+export function useUpdateNotificationSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      kind,
+      body,
+    }: {
+      kind: string;
+      body: { enabled?: boolean; thresholds?: Record<string, number> };
+    }) => updateNotificationSetting(kind, body),
+
+    onMutate: async ({ kind, body }) => {
+      await queryClient.cancelQueries({ queryKey: SETTINGS_KEY });
+      const previous = queryClient.getQueryData<NotificationSettingEntry[]>(SETTINGS_KEY);
+      if (previous) {
+        queryClient.setQueryData<NotificationSettingEntry[]>(
+          SETTINGS_KEY,
+          previous.map((entry) =>
+            entry.kind === kind
+              ? {
+                  ...entry,
+                  ...(body.enabled !== undefined ? { enabled: body.enabled } : null),
+                  ...(body.thresholds !== undefined ? { thresholds: body.thresholds } : null),
+                }
+              : entry,
+          ),
+        );
+      }
+      return { previous };
+    },
+
+    onError: (_error, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(SETTINGS_KEY, context.previous);
+      }
+    },
+
+    onSuccess: (updated) => {
+      queryClient.setQueryData<NotificationSettingEntry[]>(SETTINGS_KEY, (old) =>
+        old ? old.map((entry) => (entry.kind === updated.kind ? updated : entry)) : old,
+      );
+    },
   });
 }

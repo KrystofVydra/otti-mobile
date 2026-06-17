@@ -171,3 +171,16 @@ export interface NotificationsResponse {
 export function isTestNotification(n: AppNotification): boolean {
   return n.details?.is_test === true;
 }
+
+/**
+ * One per-kind notification setting (GET /me/notifications/settings returns an
+ * array of these). `thresholds` keys vary by kind and may be empty (toggle-only).
+ */
+export interface NotificationSettingEntry {
+  kind: NotificationKind;
+  severity: NotificationSeverity;
+  scope: NotificationScope;
+  enabled: boolean;
+  thresholds: Record<string, number>;
+  description: string;
+}

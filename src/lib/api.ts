@@ -15,6 +15,7 @@ import type {
   ControllerDetail,
   ControllerListEntry,
   LoginResponse,
+  NotificationSettingEntry,
   NotificationsResponse,
   NotificationStatus,
   Telemetry,
@@ -210,4 +211,24 @@ export function markNotificationRead(id: number): Promise<void> {
 /** POST /me/notifications/mark-all-read — mark every notification read. */
 export function markAllNotificationsRead(): Promise<void> {
   return apiFetch<void>('/me/notifications/mark-all-read', { method: 'POST' });
+}
+
+/** GET /me/notifications/settings — per-kind enable + threshold config. */
+export function getNotificationSettings(): Promise<NotificationSettingEntry[]> {
+  return apiFetch<NotificationSettingEntry[]>('/me/notifications/settings');
+}
+
+/**
+ * PATCH /me/notifications/settings/{kind} — partial update; `{ enabled }` alone
+ * preserves thresholds and vice-versa. Returns the full updated entry.
+ * For a threshold edit, send the COMPLETE thresholds object for that kind.
+ */
+export function updateNotificationSetting(
+  kind: string,
+  body: { enabled?: boolean; thresholds?: Record<string, number> },
+): Promise<NotificationSettingEntry> {
+  return apiFetch<NotificationSettingEntry>(`/me/notifications/settings/${kind}`, {
+    method: 'PATCH',
+    body,
+  });
 }
