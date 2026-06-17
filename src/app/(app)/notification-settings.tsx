@@ -1,10 +1,16 @@
 import { Stack, useNavigation } from 'expo-router';
+// usePreventRemove is the native-stack-correct unsaved-changes guard. Expo Router
+// (SDK 56) vendors React Navigation internally — @react-navigation/native is NOT
+// an installed package here — so we import the hook from the vendored core
+// (no new dependency).
+import { usePreventRemove } from 'expo-router/build/react-navigation/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Keyboard,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   Pressable,
   ScrollView,
@@ -122,8 +128,6 @@ export default function NotificationSettingsScreen() {
   const navigation = useNavigation();
   const scrollRef = useRef<ScrollView>(null);
   const cardOffsets = useRef<Record<string, number>>({});
-  // When the user confirms "Discard", we allow the next navigation through.
-  const allowLeaveRef = useRef(false);
 
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -135,14 +139,30 @@ export default function NotificationSettingsScreen() {
   }, [data, working]);
 
   // Track keyboard height so the scroll content gets room to lift the focused
-  // bottom field above the keyboard + its accessory bar.
+  // bottom field above the keyboard + its accessory bar. We animate the content
+  // padding change (synced to the keyboard's own duration on iOS) so dismissing
+  // eases the content back down instead of snapping.
   useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvt, (e) =>
-      setKeyboardHeight(e.endCoordinates?.height ?? 0),
-    );
-    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    const ios = Platform.OS === 'ios';
+    const showEvt = ios ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = ios ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const animate = (duration?: number) => {
+      if (!ios) return; // iOS is the target; Android best-effort (no anim)
+      LayoutAnimation.configureNext({
+        duration: duration && duration > 0 ? duration : 250,
+        update: { type: LayoutAnimation.Types.keyboard },
+      });
+    };
+
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      animate(e.duration);
+      setKeyboardHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, (e) => {
+      animate(e.duration);
+      setKeyboardHeight(0);
+    });
     return () => {
       showSub.remove();
       hideSub.remove();
@@ -189,25 +209,19 @@ export default function NotificationSettingsScreen() {
   const anyInvalid = Object.values(errorsByKind).some((e) => e != null);
 
   // Guard against losing unsaved edits on ANY exit (header back, swipe-back,
-  // programmatic). Only the Save button saves — the dialog just discards/stays.
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-      if (allowLeaveRef.current || !anyDirty) return; // nothing to guard
-      e.preventDefault();
-      Alert.alert('Unsaved changes', 'You have unsaved changes. Discard them?', [
-        { text: 'Keep editing', style: 'cancel' },
-        {
-          text: 'Discard',
-          style: 'destructive',
-          onPress: () => {
-            allowLeaveRef.current = true;
-            navigation.dispatch(e.data.action);
-          },
-        },
-      ]);
-    });
-    return unsubscribe;
-  }, [navigation, anyDirty]);
+  // programmatic). usePreventRemove is native-stack-correct: it blocks the
+  // removal BEFORE it happens (no "leave then popup" / native-JS desync).
+  // Only the Save button saves — the dialog just discards or stays.
+  usePreventRemove(anyDirty, ({ data }) => {
+    Alert.alert('Unsaved changes', 'You have unsaved changes. Discard them?', [
+      { text: 'Keep editing', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => navigation.dispatch(data.action),
+      },
+    ]);
+  });
 
   const setEnabled = (kind: string, next: boolean) =>
     setWorking((prev) =>
