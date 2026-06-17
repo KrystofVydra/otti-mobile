@@ -66,6 +66,9 @@ function ControllerCard({
   const anyError = latest?.any_node_error === true;
   const hasBadges = batteryPct != null || doorOpen || anyError;
   const nodeLabel = `${node_count} ${node_count === 1 ? 'node' : 'nodes'}`;
+  // "Updated" text is driven by the READING timestamp (latest.time), NOT the
+  // controller's last_seen_at. A null latest (never reported) → "No readings yet".
+  const updatedText = latest ? `Updated ${formatLastSeen(latest.time)}` : 'No readings yet';
 
   return (
     <Pressable
@@ -111,7 +114,7 @@ function ControllerCard({
       <View style={styles.cardBottom}>
         <StatusPill online={online} />
         <Text style={styles.lastSeen}>
-          {nodeLabel} · {formatLastSeen(last_seen_at)}
+          {nodeLabel} · {updatedText}
         </Text>
       </View>
     </Pressable>
