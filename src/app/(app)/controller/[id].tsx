@@ -349,15 +349,7 @@ export default function ControllerDetailScreen() {
           ) : null}
         </View>
 
-        {/* Nodes */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Nodes ({nodes.length})</Text>
-          {nodes.map((node) => (
-            <NodeTile key={node.id} node={node} />
-          ))}
-        </View>
-
-        {/* Controller telemetry strip */}
+        {/* Controller telemetry strip — directly below the chart, above nodes. */}
         <View style={styles.telemetryCard}>
           {latest_telemetry ? (
             <View style={styles.telemetryRow}>
@@ -375,7 +367,14 @@ export default function ControllerDetailScreen() {
           ) : (
             <Text style={styles.subtle}>No telemetry yet</Text>
           )}
-          <Text style={styles.pointsInRange}>Points in range: {readings?.length ?? 0}</Text>
+        </View>
+
+        {/* Nodes */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Nodes ({nodes.length})</Text>
+          {nodes.map((node) => (
+            <NodeTile key={node.id} node={node} />
+          ))}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -593,10 +592,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#000000',
-  },
-  pointsInRange: {
-    fontSize: 12,
-    color: '#9AA0A6',
   },
   // Shared pill + states
   pill: {
