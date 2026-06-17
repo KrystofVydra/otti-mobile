@@ -583,15 +583,18 @@ const styles = StyleSheet.create({
   stat: {
     flex: 1,
     gap: 4,
+    alignItems: 'center',
   },
   statLabel: {
     fontSize: 12,
     color: SECONDARY,
+    textAlign: 'center',
   },
   statValue: {
     fontSize: 16,
     fontWeight: '700',
     color: '#000000',
+    textAlign: 'center',
   },
   // Shared pill + states
   pill: {
