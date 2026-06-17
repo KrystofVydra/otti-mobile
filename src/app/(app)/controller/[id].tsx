@@ -159,15 +159,18 @@ function TelemetryStat({
   label,
   value,
   color,
+  align = 'center',
 }: {
   label: string;
   value: string;
   color?: string;
+  align?: 'left' | 'center' | 'right';
 }) {
+  const alignItems = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center';
   return (
-    <View style={styles.stat}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, color ? { color } : null]}>{value}</Text>
+    <View style={[styles.stat, { alignItems }]}>
+      <Text style={[styles.statLabel, { textAlign: align }]}>{label}</Text>
+      <Text style={[styles.statValue, { textAlign: align }, color ? { color } : null]}>{value}</Text>
     </View>
   );
 }
@@ -357,11 +360,17 @@ export default function ControllerDetailScreen() {
                 label="Battery"
                 value={`${latest_telemetry.battery_pct}%`}
                 color={batteryColor(latest_telemetry.battery_pct)}
+                align="left"
               />
-              <TelemetryStat label="Door" value={latest_telemetry.door_open ? 'Open' : 'Closed'} />
+              <TelemetryStat
+                label="Door"
+                value={latest_telemetry.door_open ? 'Open' : 'Closed'}
+                align="center"
+              />
               <TelemetryStat
                 label="Last telemetry"
                 value={formatTimestamp(new Date(latest_telemetry.time).getTime())}
+                align="right"
               />
             </View>
           ) : (
@@ -583,18 +592,15 @@ const styles = StyleSheet.create({
   stat: {
     flex: 1,
     gap: 4,
-    alignItems: 'center',
   },
   statLabel: {
     fontSize: 12,
     color: SECONDARY,
-    textAlign: 'center',
   },
   statValue: {
     fontSize: 16,
     fontWeight: '700',
     color: '#000000',
-    textAlign: 'center',
   },
   // Shared pill + states
   pill: {
