@@ -171,7 +171,7 @@ export default function DashboardScreen() {
           <ControllerCard
             entry={item}
             onPress={() =>
-              router.push({ pathname: '/device/[id]', params: { id: String(item.id) } })
+              router.push({ pathname: '/controller/[id]', params: { id: String(item.id) } })
             }
           />
         )}
