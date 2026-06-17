@@ -24,6 +24,9 @@ export default function AppTabs() {
           <TabTrigger name="index" href="/" asChild>
             <TabButton>Devices</TabButton>
           </TabTrigger>
+          <TabTrigger name="notifications" href="/notifications" asChild>
+            <TabButton>Notifications</TabButton>
+          </TabTrigger>
           <TabTrigger name="settings" href="/settings" asChild>
             <TabButton>Settings</TabButton>
           </TabTrigger>

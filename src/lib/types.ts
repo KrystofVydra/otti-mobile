@@ -115,3 +115,59 @@ export interface TempReading {
   time: string;
   temperature_avg: number;
 }
+
+/* ---- Notifications ---- */
+
+/** The 11 notification kinds the backend can emit. */
+export type NotificationKind =
+  | 'temp_safe'
+  | 'temp_preferred'
+  | 'temp_drift'
+  | 'door_open'
+  | 'controller_offline'
+  | 'gateway_offline'
+  | 'multi_controller_offline'
+  | 'battery_critical'
+  | 'battery_low'
+  | 'node_error_single'
+  | 'node_error_cumulative';
+
+export type NotificationSeverity = 'critical' | 'alert';
+export type NotificationScope = 'gateway' | 'controller' | 'node';
+
+/** Filter passed to GET /me/notifications?status=... */
+export type NotificationStatus = 'active' | 'all' | 'resolved';
+
+/**
+ * A single in-app notification. `summary` is a PRE-RENDERED display string —
+ * use it for the body text. `read_at == null` → unread; `resolved_at != null` →
+ * resolved. `details?.is_test === true` marks a test notification.
+ */
+export interface AppNotification {
+  id: number;
+  kind: NotificationKind;
+  severity: NotificationSeverity;
+  scope: NotificationScope;
+  gateway_id: number | null;
+  controller_id: number | null;
+  node_id: number | null;
+  subject_name: string;
+  details: Record<string, unknown> | null;
+  opened_at: string;
+  resolved_at: string | null;
+  read_at: string | null;
+  summary: string;
+}
+
+/** Envelope returned by GET /me/notifications. */
+export interface NotificationsResponse {
+  notifications: AppNotification[];
+  total: number;
+  unread: number;
+  active: number;
+}
+
+/** True if the notification is a test notification (details.is_test === true). */
+export function isTestNotification(n: AppNotification): boolean {
+  return n.details?.is_test === true;
+}

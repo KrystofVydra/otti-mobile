@@ -15,6 +15,8 @@ import type {
   ControllerDetail,
   ControllerListEntry,
   LoginResponse,
+  NotificationsResponse,
+  NotificationStatus,
   Telemetry,
   TempReading,
   User,
@@ -182,4 +184,30 @@ export function getControllerTelemetry(
   params: { from: string; to: string; bucket: string; limit?: number },
 ): Promise<Telemetry[]> {
   return apiFetch<Telemetry[]>(`/controllers/${id}/telemetry?${timeSeriesQuery(params)}`);
+}
+
+/* ---- Notifications ---- */
+
+/** GET /me/notifications/unread-count — drives the tab badge. */
+export function getUnreadCount(): Promise<{ count: number }> {
+  return apiFetch<{ count: number }>('/me/notifications/unread-count');
+}
+
+/** GET /me/notifications — envelope with the list + unread/active/total counts. */
+export function getNotifications(
+  status: NotificationStatus,
+  limit = 50,
+): Promise<NotificationsResponse> {
+  const query = `status=${encodeURIComponent(status)}&limit=${encodeURIComponent(String(limit))}`;
+  return apiFetch<NotificationsResponse>(`/me/notifications?${query}`);
+}
+
+/** POST /me/notifications/{id}/read — mark one notification read. */
+export function markNotificationRead(id: number): Promise<void> {
+  return apiFetch<void>(`/me/notifications/${id}/read`, { method: 'POST' });
+}
+
+/** POST /me/notifications/mark-all-read — mark every notification read. */
+export function markAllNotificationsRead(): Promise<void> {
+  return apiFetch<void>('/me/notifications/mark-all-read', { method: 'POST' });
 }

@@ -80,6 +80,38 @@ metadata only — modeled in types for v2, but **no gateway UI** in v1.
 > return all points sharing one timestamp. Build against the **intended** shape
 > (distinct ascending `time`, one value per bucket) — no client workarounds.
 
+### Notifications (in-app)
+
+In-app notification surface only — **push notifications are deferred** by the
+backend (not implemented client-side).
+
+- `GET /me/notifications/unread-count` → `{ count }`. Polled every **30s** to
+  drive the Notifications tab badge.
+- `GET /me/notifications?status=active|all|resolved&limit=50` → an **envelope**
+  (not a bare array): `{ notifications: Notification[], total, unread, active }`.
+- `POST /me/notifications/{id}/read` — mark one read.
+- `POST /me/notifications/mark-all-read` — mark all read.
+
+Each notification: `id`, `kind`, `severity` (`critical` | `alert`), `scope`
+(`gateway` | `controller` | `node`), nullable `gateway_id` / `controller_id` /
+`node_id`, `subject_name` (title), `details` (kind-specific JSON, may contain
+`is_test`), `opened_at`, `resolved_at` (nullable), `read_at` (nullable),
+`summary` (**pre-rendered** display string — use directly for body text).
+
+- **11 kinds:** `temp_safe`, `temp_preferred`, `temp_drift`, `door_open`,
+  `controller_offline`, `gateway_offline`, `multi_controller_offline`,
+  `battery_critical`, `battery_low`, `node_error_single`,
+  `node_error_cumulative`.
+- **Severity color:** `critical` → red `#D7263D`; `alert` → amber `#E8833A`.
+- **Read:** `read_at == null` → unread (highlight + dot + bold). **Resolved:**
+  `resolved_at != null` → resolved (muted "Resolved" marker); `active` filter =
+  not resolved.
+- **Test:** `details?.is_test === true` → neutral outline "TEST" badge. (Test
+  notifications may contain literal `TEST_VALUE` placeholders in `summary` — a
+  backend quirk; render `summary` as-is.)
+- Tapping a notification marks it read; if `controller_id != null` it deep-links
+  to that controller's detail (gateway-scoped ones just mark read).
+
 ## Token storage
 
 - Use **`expo-secure-store`** (Keychain-backed) for the bearer token.
