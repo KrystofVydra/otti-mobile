@@ -1,8 +1,9 @@
-import { Stack } from 'expo-router';
+import { Stack, useNavigation } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -118,8 +119,13 @@ export default function NotificationSettingsScreen() {
   const [working, setWorking] = useState<WorkingState | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const navigation = useNavigation();
   const scrollRef = useRef<ScrollView>(null);
   const cardOffsets = useRef<Record<string, number>>({});
+  // When the user confirms "Discard", we allow the next navigation through.
+  const allowLeaveRef = useRef(false);
+
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   // Initialize the local working copy once settings have loaded.
   useEffect(() => {
@@ -127,6 +133,31 @@ export default function NotificationSettingsScreen() {
       setWorking(buildWorking(data));
     }
   }, [data, working]);
+
+  // Track keyboard height so the scroll content gets room to lift the focused
+  // bottom field above the keyboard + its accessory bar.
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, (e) =>
+      setKeyboardHeight(e.endCoordinates?.height ?? 0),
+    );
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // Scroll a focused field's card clear of the keyboard.
+  const scrollCardIntoView = (kind: string) => {
+    const y = cardOffsets.current[kind];
+    if (y == null) return;
+    // Defer so the keyboard inset + content padding settle before we scroll.
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
+    }, 80);
+  };
 
   const serverByKind = useMemo(() => {
     const map: Record<string, NotificationSettingEntry> = {};
@@ -156,6 +187,27 @@ export default function NotificationSettingsScreen() {
 
   const anyDirty = Object.values(dirtyByKind).some(Boolean);
   const anyInvalid = Object.values(errorsByKind).some((e) => e != null);
+
+  // Guard against losing unsaved edits on ANY exit (header back, swipe-back,
+  // programmatic). Only the Save button saves — the dialog just discards/stays.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      if (allowLeaveRef.current || !anyDirty) return; // nothing to guard
+      e.preventDefault();
+      Alert.alert('Unsaved changes', 'You have unsaved changes. Discard them?', [
+        { text: 'Keep editing', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            allowLeaveRef.current = true;
+            navigation.dispatch(e.data.action);
+          },
+        },
+      ]);
+    });
+    return unsubscribe;
+  }, [navigation, anyDirty]);
 
   const setEnabled = (kind: string, next: boolean) =>
     setWorking((prev) =>
@@ -282,8 +334,9 @@ export default function NotificationSettingsScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           ref={scrollRef}
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled">
+          contentContainerStyle={[styles.content, { paddingBottom: 24 + keyboardHeight }]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag">
           {data.map((entry) => {
             const w = working[entry.kind];
             const thresholdKeys = Object.keys(entry.thresholds);
@@ -328,6 +381,7 @@ export default function NotificationSettingsScreen() {
                           keyboardType="decimal-pad"
                           returnKeyType="done"
                           selectTextOnFocus
+                          onFocus={() => scrollCardIntoView(entry.kind)}
                           onChangeText={(text) => setThreshold(entry.kind, key, text)}
                         />
                       </View>
