@@ -147,11 +147,16 @@ export default function NotificationSettingsScreen() {
     const showEvt = ios ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = ios ? 'keyboardWillHide' : 'keyboardDidHide';
 
+    // Ease the content-padding change in sync with the keyboard. Fired from BOTH
+    // keyboardWillShow and keyboardWillHide, so open and every dismiss route share
+    // one identical transition (matched to the keyboard's own duration).
     const animate = (duration?: number) => {
       if (!ios) return; // iOS is the target; Android best-effort (no anim)
       LayoutAnimation.configureNext({
         duration: duration && duration > 0 ? duration : 250,
-        update: { type: LayoutAnimation.Types.keyboard },
+        update: { type: LayoutAnimation.Types.easeInEaseOut },
+        create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+        delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
       });
     };
 
@@ -350,7 +355,11 @@ export default function NotificationSettingsScreen() {
           ref={scrollRef}
           contentContainerStyle={[styles.content, { paddingBottom: 24 + keyboardHeight }]}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag">
+          // dismissMode "none" + manual dismiss on drag start routes the
+          // scroll-to-dismiss through keyboardWillHide — the SAME animated path
+          // as Done/tap-away — instead of the native on-drag fast hide.
+          keyboardDismissMode="none"
+          onScrollBeginDrag={() => Keyboard.dismiss()}>
           {data.map((entry) => {
             const w = working[entry.kind];
             const thresholdKeys = Object.keys(entry.thresholds);
