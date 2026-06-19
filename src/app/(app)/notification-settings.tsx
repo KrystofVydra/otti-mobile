@@ -18,6 +18,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -128,14 +129,36 @@ export default function NotificationSettingsScreen() {
   const [saving, setSaving] = useState(false);
 
   const navigation = useNavigation();
+  const { height: windowHeight } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
   const cardOffsets = useRef<Record<string, number>>({});
+  const scrollY = useRef(0); // live scroll offset (from onScroll)
+  const restoreY = useRef(0); // scroll offset captured at the start of editing
+  const keyboardVisibleRef = useRef(false); // synchronous read inside onFocus
 
   // ONE keyboard-synced value (current keyboard height; 0 when hidden) drives
-  // BOTH the footer lift AND the content bottom spacer, so they move in perfect
-  // lockstep with the keyboard — no competing animators (KeyboardAvoidingView /
-  // LayoutAnimation) on different clocks.
+  // the content bottom spacer (so fields can scroll above the keyboard) in
+  // lockstep with the keyboard — no competing animators on different clocks.
   const keyboardOffset = useRef(new Animated.Value(0)).current;
+
+  // Hide the Save footer while editing (keyboard up); show it when keyboard down.
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  // Bottom spacer height: the keyboard height PLUS most of a screen of trailing
+  // room (only while the keyboard is up), so even the LAST card can be scrolled
+  // to the top of the keyboard-shrunk viewport. Driven by keyboardOffset.
+  const spacerHeight = useMemo(
+    () =>
+      Animated.add(
+        keyboardOffset,
+        keyboardOffset.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, windowHeight],
+          extrapolate: 'clamp',
+        }),
+      ),
+    [keyboardOffset, windowHeight],
+  );
 
   // Initialize the local working copy once settings have loaded.
   useEffect(() => {
@@ -146,8 +169,8 @@ export default function NotificationSettingsScreen() {
 
   // Animate keyboardOffset with a SINGLE timing per keyboard event, matched to
   // the keyboard's own duration + easing. On iOS use the *Will* events (they
-  // fire before the keyboard moves and carry the duration), so the footer and
-  // content track the keyboard exactly on both show and hide.
+  // fire before the keyboard moves and carry the duration). On hide, also ease
+  // the scroll back to the pre-edit position so it returns in sync.
   useEffect(() => {
     const ios = Platform.OS === 'ios';
     const showEvt = ios ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -158,25 +181,37 @@ export default function NotificationSettingsScreen() {
         toValue,
         duration: duration && duration > 0 ? duration : 250,
         easing: KEYBOARD_EASING,
-        useNativeDriver: false, // animating layout (padding/height) — JS driver required
+        useNativeDriver: false, // animating layout (height) — JS driver required
       }).start();
     };
 
-    const showSub = Keyboard.addListener(showEvt, (e) =>
-      animateTo(e.endCoordinates?.height ?? 0, e.duration),
-    );
-    const hideSub = Keyboard.addListener(hideEvt, (e) => animateTo(0, e.duration));
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      keyboardVisibleRef.current = true;
+      setKeyboardVisible(true);
+      animateTo(e.endCoordinates?.height ?? 0, e.duration);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, (e) => {
+      keyboardVisibleRef.current = false;
+      setKeyboardVisible(false);
+      animateTo(0, e.duration);
+      // Ease back to exactly where we were before editing began.
+      scrollRef.current?.scrollTo({ y: restoreY.current, animated: true });
+    });
     return () => {
       showSub.remove();
       hideSub.remove();
     };
   }, [keyboardOffset]);
 
-  // Scroll a focused field's card clear of the keyboard.
-  const scrollCardIntoView = (kind: string) => {
+  // On focus: remember the pre-edit scroll position (only on the first focus that
+  // raises the keyboard, not when switching fields), then pin the card to the top.
+  const handleFieldFocus = (kind: string) => {
+    if (!keyboardVisibleRef.current) {
+      restoreY.current = scrollY.current;
+    }
     const y = cardOffsets.current[kind];
     if (y == null) return;
-    // Defer so the keyboard inset + content padding settle before we scroll.
+    // Defer so the spacer/keyboard layout settles before we scroll the card up.
     setTimeout(() => {
       scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
     }, 80);
@@ -355,7 +390,11 @@ export default function NotificationSettingsScreen() {
         // dismiss through keyboardWillHide → the SAME single Animated timing as
         // Done/tap-away, so every dismiss route stays in lockstep.
         keyboardDismissMode="none"
-        onScrollBeginDrag={() => Keyboard.dismiss()}>
+        onScrollBeginDrag={() => Keyboard.dismiss()}
+        onScroll={(e) => {
+          scrollY.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}>
           {data.map((entry) => {
             const w = working[entry.kind];
             const thresholdKeys = Object.keys(entry.thresholds);
@@ -400,7 +439,7 @@ export default function NotificationSettingsScreen() {
                           keyboardType="decimal-pad"
                           returnKeyType="done"
                           selectTextOnFocus
-                          onFocus={() => scrollCardIntoView(entry.kind)}
+                          onFocus={() => handleFieldFocus(entry.kind)}
                           onChangeText={(text) => setThreshold(entry.kind, key, text)}
                         />
                       </View>
@@ -413,32 +452,36 @@ export default function NotificationSettingsScreen() {
             );
           })}
 
-          {/* Animated spacer: grows the scroll content by the keyboard height so
-              the last fields can scroll clear above the keyboard, in lockstep. */}
-          <Animated.View style={{ height: keyboardOffset }} />
+          {/* Animated spacer: trailing scroll room (keyboard height + a screen),
+              so even the last card can scroll to the top while editing. Driven
+              by the same keyboardOffset, so it grows/shrinks with the keyboard. */}
+          <Animated.View style={{ height: spacerHeight }} />
         </ScrollView>
 
-        {/* Sticky save footer — lifts with the keyboard via the SAME Animated
-            value, so it never jumps ahead of or lags the keyboard. */}
-        <Animated.View style={[styles.footer, { paddingBottom: Animated.add(16, keyboardOffset) }]}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.saveButton,
-              mode === 'invalid' && styles.saveButtonInvalid,
-              mode === 'disabled' && styles.saveButtonDisabled,
-              pressed && mode !== 'disabled' && styles.pressed,
-            ]}
-            disabled={mode === 'disabled' || mode === 'saving'}
-            onPress={handleSave}>
-            {mode === 'saving' ? (
-              <ActivityIndicator color="#ffffff" />
-            ) : (
-              <Text style={styles.saveButtonText}>
-                {mode === 'invalid' ? 'Check values' : 'Save'}
-              </Text>
-            )}
-          </Pressable>
-        </Animated.View>
+        {/* Save footer — hidden while the keyboard is up (editing), shown when
+            the keyboard is down. No animated lift needed since it's not on
+            screen during editing. */}
+        {keyboardVisible ? null : (
+          <View style={styles.footer}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.saveButton,
+                mode === 'invalid' && styles.saveButtonInvalid,
+                mode === 'disabled' && styles.saveButtonDisabled,
+                pressed && mode !== 'disabled' && styles.pressed,
+              ]}
+              disabled={mode === 'disabled' || mode === 'saving'}
+              onPress={handleSave}>
+              {mode === 'saving' ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.saveButtonText}>
+                  {mode === 'invalid' ? 'Check values' : 'Save'}
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        )}
     </SafeAreaView>
   );
 }
