@@ -8,9 +8,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Keyboard,
-  KeyboardAvoidingView,
-  LayoutAnimation,
   Platform,
   Pressable,
   ScrollView,
@@ -28,6 +28,8 @@ import type { NotificationSettingEntry, NotificationSeverity } from '@/lib/types
 const ACCENT = '#208AEF';
 const CRITICAL = '#D7263D';
 const ALERT = '#E8833A';
+// Approximates the iOS keyboard curve (RN has no Easing.keyboard).
+const KEYBOARD_EASING = Easing.out(Easing.ease);
 const SECONDARY = '#60646C';
 const MUTED = '#C0C4CA';
 
@@ -129,7 +131,11 @@ export default function NotificationSettingsScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const cardOffsets = useRef<Record<string, number>>({});
 
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  // ONE keyboard-synced value (current keyboard height; 0 when hidden) drives
+  // BOTH the footer lift AND the content bottom spacer, so they move in perfect
+  // lockstep with the keyboard — no competing animators (KeyboardAvoidingView /
+  // LayoutAnimation) on different clocks.
+  const keyboardOffset = useRef(new Animated.Value(0)).current;
 
   // Initialize the local working copy once settings have loaded.
   useEffect(() => {
@@ -138,41 +144,33 @@ export default function NotificationSettingsScreen() {
     }
   }, [data, working]);
 
-  // Track keyboard height so the scroll content gets room to lift the focused
-  // bottom field above the keyboard + its accessory bar. We animate the content
-  // padding change (synced to the keyboard's own duration on iOS) so dismissing
-  // eases the content back down instead of snapping.
+  // Animate keyboardOffset with a SINGLE timing per keyboard event, matched to
+  // the keyboard's own duration + easing. On iOS use the *Will* events (they
+  // fire before the keyboard moves and carry the duration), so the footer and
+  // content track the keyboard exactly on both show and hide.
   useEffect(() => {
     const ios = Platform.OS === 'ios';
     const showEvt = ios ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = ios ? 'keyboardWillHide' : 'keyboardDidHide';
 
-    // Ease the content-padding change in sync with the keyboard. Fired from BOTH
-    // keyboardWillShow and keyboardWillHide, so open and every dismiss route share
-    // one identical transition (matched to the keyboard's own duration).
-    const animate = (duration?: number) => {
-      if (!ios) return; // iOS is the target; Android best-effort (no anim)
-      LayoutAnimation.configureNext({
+    const animateTo = (toValue: number, duration?: number) => {
+      Animated.timing(keyboardOffset, {
+        toValue,
         duration: duration && duration > 0 ? duration : 250,
-        update: { type: LayoutAnimation.Types.easeInEaseOut },
-        create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-        delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-      });
+        easing: KEYBOARD_EASING,
+        useNativeDriver: false, // animating layout (padding/height) — JS driver required
+      }).start();
     };
 
-    const showSub = Keyboard.addListener(showEvt, (e) => {
-      animate(e.duration);
-      setKeyboardHeight(e.endCoordinates?.height ?? 0);
-    });
-    const hideSub = Keyboard.addListener(hideEvt, (e) => {
-      animate(e.duration);
-      setKeyboardHeight(0);
-    });
+    const showSub = Keyboard.addListener(showEvt, (e) =>
+      animateTo(e.endCoordinates?.height ?? 0, e.duration),
+    );
+    const hideSub = Keyboard.addListener(hideEvt, (e) => animateTo(0, e.duration));
     return () => {
       showSub.remove();
       hideSub.remove();
     };
-  }, []);
+  }, [keyboardOffset]);
 
   // Scroll a focused field's card clear of the keyboard.
   const scrollCardIntoView = (kind: string) => {
@@ -348,18 +346,16 @@ export default function NotificationSettingsScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <Stack.Screen options={{ title: 'Notification settings', headerBackTitle: 'Settings' }} />
-      <KeyboardAvoidingView
+      <ScrollView
+        ref={scrollRef}
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={[styles.content, { paddingBottom: 24 + keyboardHeight }]}
-          keyboardShouldPersistTaps="handled"
-          // dismissMode "none" + manual dismiss on drag start routes the
-          // scroll-to-dismiss through keyboardWillHide — the SAME animated path
-          // as Done/tap-away — instead of the native on-drag fast hide.
-          keyboardDismissMode="none"
-          onScrollBeginDrag={() => Keyboard.dismiss()}>
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        // dismissMode "none" + manual dismiss on drag start routes scroll-to-
+        // dismiss through keyboardWillHide → the SAME single Animated timing as
+        // Done/tap-away, so every dismiss route stays in lockstep.
+        keyboardDismissMode="none"
+        onScrollBeginDrag={() => Keyboard.dismiss()}>
           {data.map((entry) => {
             const w = working[entry.kind];
             const thresholdKeys = Object.keys(entry.thresholds);
@@ -416,10 +412,15 @@ export default function NotificationSettingsScreen() {
               </View>
             );
           })}
+
+          {/* Animated spacer: grows the scroll content by the keyboard height so
+              the last fields can scroll clear above the keyboard, in lockstep. */}
+          <Animated.View style={{ height: keyboardOffset }} />
         </ScrollView>
 
-        {/* Sticky save footer */}
-        <View style={styles.footer}>
+        {/* Sticky save footer — lifts with the keyboard via the SAME Animated
+            value, so it never jumps ahead of or lags the keyboard. */}
+        <Animated.View style={[styles.footer, { paddingBottom: Animated.add(16, keyboardOffset) }]}>
           <Pressable
             style={({ pressed }) => [
               styles.saveButton,
@@ -437,8 +438,7 @@ export default function NotificationSettingsScreen() {
               </Text>
             )}
           </Pressable>
-        </View>
-      </KeyboardAvoidingView>
+        </Animated.View>
     </SafeAreaView>
   );
 }
