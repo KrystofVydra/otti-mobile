@@ -135,6 +135,7 @@ export default function NotificationSettingsScreen() {
   const scrollY = useRef(0); // live scroll offset (from onScroll)
   const restoreY = useRef(0); // scroll offset captured at the start of editing
   const keyboardVisibleRef = useRef(false); // synchronous read inside onFocus
+  const dismissedByDragRef = useRef(false); // did this dismiss come from a scroll-drag?
 
   // ONE keyboard-synced value (current keyboard height; 0 when hidden) drives
   // the content bottom spacer (so fields can scroll above the keyboard) in
@@ -188,14 +189,32 @@ export default function NotificationSettingsScreen() {
     const showSub = Keyboard.addListener(showEvt, (e) => {
       keyboardVisibleRef.current = true;
       setKeyboardVisible(true);
+      // Fresh editing session — a stray drag before the keyboard came up must
+      // not suppress the restore on this dismiss.
+      dismissedByDragRef.current = false;
       animateTo(e.endCoordinates?.height ?? 0, e.duration);
     });
     const hideSub = Keyboard.addListener(hideEvt, (e) => {
       keyboardVisibleRef.current = false;
       setKeyboardVisible(false);
       animateTo(0, e.duration);
-      // Ease back to exactly where we were before editing began.
-      scrollRef.current?.scrollTo({ y: restoreY.current, animated: true });
+
+      // Only restore for Done / tap-outside dismissals. A drag-dismiss means the
+      // user deliberately scrolled somewhere — yanking them back would be jarring.
+      if (dismissedByDragRef.current) {
+        dismissedByDragRef.current = false;
+        return;
+      }
+
+      // Defer the restore until AFTER the bottom spacer has collapsed (content
+      // back to its keyboard-down height). Restoring mid-collapse applies an
+      // offset that's out of range for the shrinking content, so bottom tiles
+      // over-scroll to the very top. Waiting for the collapse means restoreY —
+      // captured while the keyboard was down — is valid for the final layout.
+      const delay = (e.duration && e.duration > 0 ? e.duration : 250) + 30;
+      setTimeout(() => {
+        scrollRef.current?.scrollTo({ y: restoreY.current, animated: true });
+      }, delay);
     });
     return () => {
       showSub.remove();
@@ -390,7 +409,13 @@ export default function NotificationSettingsScreen() {
         // dismiss through keyboardWillHide → the SAME single Animated timing as
         // Done/tap-away, so every dismiss route stays in lockstep.
         keyboardDismissMode="none"
-        onScrollBeginDrag={() => Keyboard.dismiss()}
+        onScrollBeginDrag={() => {
+          // Mark this as a drag-dismiss (only if the keyboard is actually up) so
+          // keyboardWillHide skips the scroll-restore and leaves the user where
+          // they dragged to.
+          if (keyboardVisibleRef.current) dismissedByDragRef.current = true;
+          Keyboard.dismiss();
+        }}
         onScroll={(e) => {
           scrollY.current = e.nativeEvent.contentOffset.y;
         }}
